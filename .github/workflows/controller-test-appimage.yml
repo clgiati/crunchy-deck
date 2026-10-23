@@ -1,0 +1,61 @@
+name: Controller fix AppImage
+
+on:
+  push:
+    branches: [fix/controller-input-state]
+    paths: [.github/workflows/controller-test-appimage.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build renderer and Electron
+        run: pnpm build
+      - name: Package Linux x86_64 AppImage
+        run: pnpm exec electron-builder --linux AppImage --x64 --publish never
+      - name: Checksum
+        working-directory: release
+        run: sha256sum crunchy-deck.AppImage > SHA256SUMS
+      - name: Save build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crunchy-deck-controller-fix-linux-x64
+          path: |
+            release/crunchy-deck.AppImage
+            release/SHA256SUMS
+      - name: Publish test release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_COMMIT: ${{ github.sha }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > /tmp/release-notes.md <<'NOTES'
+          Steam Deck / Linux x86_64 test build with the controller input fix.
+
+          Each gamepad now has independent button history and hold timers, preventing an idle controller from turning a held button on another controller into repeated presses.
+
+          Download crunchy-deck.AppImage below, make it executable, and launch with --no-sandbox (also use this argument when adding it to Steam).
+
+          The fix passed 82 unit tests and 6 browser end-to-end tests. All 6 browser regression tests failed against the original code. The locally packaged AppImage also passed launch and simulated controller checks. Physical PS5/Deck controller input and signed-in playback need testing on your hardware.
+
+          This test build retains version 0.2.1 and the upstream updater. Avoid installing upstream updates while testing this fix.
+          NOTES
+          gh release create "controller-test-${BUILD_COMMIT:0:7}" \
+            release/crunchy-deck.AppImage release/SHA256SUMS \
+            --target "$BUILD_COMMIT" --prerelease --latest=false \
+            --title "Controller input fix — Steam Deck test AppImage" \
+            --notes-file /tmp/release-notes.md
