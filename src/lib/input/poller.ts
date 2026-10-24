@@ -9,6 +9,7 @@ function createPadState(id: string) {
     id,
     axis: new AxisTracker(0.5, 0.3),
     repeat: new RepeatTimer({ initialDelay: 320, startInterval: 120, minInterval: 45, ramp: 1000 }),
+    // separate accelerating repeat for the skip buttons: hold to fast-forward / rewind in the player.
     skipRepeat: new RepeatTimer({ initialDelay: 350, startInterval: 280, minInterval: 110, ramp: 1800 }),
     prevButtons: new Map<number, boolean>(),
     heldDir: null as Direction | null,
