@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test'
 
 // Simulate the browser Gamepad API, keeping the real animation loop, command routing,
 // Svelte overlays and DOM focus navigation. No production input functions are mocked.
+// Time runs on Playwright's paused fake clock, so the poller's frames and its millisecond
+// repeat timers stay in step however slow the machine is.
 async function button(page: Page, slot: number, index: number, pressed: boolean) {
   await page.evaluate(({ slot, index, pressed }) => {
     const p = (window as any).__pads[slot]
@@ -9,9 +11,7 @@ async function button(page: Page, slot: number, index: number, pressed: boolean)
   }, { slot, index, pressed })
 }
 async function frames(page: Page, count = 20) {
-  await page.evaluate(async (count) => {
-    for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
-  }, count)
+  await page.clock.runFor(count * 16)
 }
 async function commands(page: Page, command: string) {
   return page.evaluate((command) => (window as any).__logs.filter((s: string) => s.startsWith(`[cmd] ${command} @`)).length, command)
@@ -30,8 +30,12 @@ for (const activeSlot of [0, 1]) {
         ].map(p => ({ ...p, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })) }))
         Object.defineProperty(navigator, 'getGamepads', { value: () => w.__pads })
       })
+      await page.clock.install()
       await page.goto('/demo')
-      await expect(page.locator('#cw-0')).toBeFocused()
+      // Generous timeout: on a cold Vite cache the first load re-optimizes deps and reloads.
+      await expect(page.locator('#cw-0')).toBeFocused({ timeout: 30_000 })
+      // The clock keeps running until paused; aim 1s ahead so a busy machine can't overshoot it.
+      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
     })
 
     test('one D-pad press moves exactly one card, with release/repress working', async ({ page }) => {
