@@ -1,3 +1,4 @@
+import { appOwnsInput } from './activity'
 import { moveFocus } from './navigate'
 import type { NavCommand } from './gamepad'
 import { isNavOpen, isExitOpen, openNav, closeNav, openExit, closeExit } from '$lib/nav/overlays'
@@ -45,6 +46,7 @@ function homeIntent(cmd: NavCommand): boolean {
 
 // Single entry point for ALL input sources (gamepad, keyboard, on-screen test pad).
 export function dispatchCommand(cmd: NavCommand) {
+  if (!appOwnsInput()) return
   window.cr?.log(`[cmd] ${cmd} @ ${location.pathname}`) // TEMP diagnostics
   // A single-select overlay (language picker) traps input: D-pad moves within its list, A selects,
   // B closes. The page beneath is [inert] so moveFocus only sees the picker's options.

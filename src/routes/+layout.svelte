@@ -2,6 +2,7 @@
   import '../app.css'
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
+  import { appOwnsInput } from '$lib/input/activity'
   import { startGamepadPoller } from '$lib/input/poller'
   import { startDragScroll } from '$lib/input/dragScroll'
   import { startSteamChordTracker } from '$lib/input/steamChord'
@@ -51,6 +52,7 @@
     window.addEventListener('beforeinput', onBeforeInput, true)
 
     const onKey = (e: KeyboardEvent) => {
+      if (!appOwnsInput()) return
       const a = document.activeElement
       const typing = !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')
       let cmd: 'up' | 'down' | 'left' | 'right' | 'confirm' | 'cancel' | null = null

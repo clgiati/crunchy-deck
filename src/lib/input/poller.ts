@@ -3,10 +3,12 @@ import { resolveButton, feedCapture } from './bindings'
 import { RepeatTimer } from './repeat'
 import { setInputType } from './inputType'
 import { dispatchCommand } from './commands'
+import { appOwnsInput } from './activity'
 
 function createPadState(id: string) {
   return {
     id,
+    waitForNeutral: false,
     axis: new AxisTracker(0.5, 0.3),
     repeat: new RepeatTimer({ initialDelay: 320, startInterval: 120, minInterval: 45, ramp: 1000 }),
     skipRepeat: new RepeatTimer({ initialDelay: 350, startInterval: 280, minInterval: 110, ramp: 1800 }),
@@ -21,6 +23,24 @@ export function startGamepadPoller() {
   // Edge detection and hold timers belong to a controller, never to the whole frame.
   const states = new Map<number, ReturnType<typeof createPadState>>()
   let raf = 0
+  let suspended = !appOwnsInput()
+  // Blur/visibility can happen between animation frames (rAF may stop entirely
+  // under an overlay). Latch suspension immediately so no held input is replayed.
+  const suspend = () => {
+    suspended = true
+    for (const [index, state] of states) {
+      const fresh = createPadState(state.id)
+      fresh.waitForNeutral = true
+      states.set(index, fresh)
+    }
+  }
+  const onVisibility = () => { if (document.hidden) suspend() }
+  const onChord = (e: KeyboardEvent) => {
+    if (e.key === 'Meta' || e.key === 'OS' || e.key === 'Alt') suspend()
+  }
+  window.addEventListener('blur', suspend)
+  document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('keydown', onChord, true)
 
   // TEMP input diagnostics — reveals what the Steam Deck emits per physical button so the
   // back/menu mappings can be fixed against real evidence. Remove once mapping is confirmed.
@@ -32,6 +52,13 @@ export function startGamepadPoller() {
   const dispatch = (cmd: NavCommand) => dispatchCommand(cmd)
 
   const loop = () => {
+    if (!appOwnsInput()) {
+      if (!suspended) suspend()
+      raf = requestAnimationFrame(loop)
+      return
+    }
+    const resuming = suspended
+    suspended = false
     const pads = navigator.getGamepads?.() ?? []
     const connected = new Set<number>()
     for (const pad of pads) {
@@ -40,7 +67,16 @@ export function startGamepadPoller() {
       let state = states.get(pad.index)
       if (!state || state.id !== pad.id) {
         state = createPadState(pad.id)
+        state.waitForNeutral = resuming
         states.set(pad.index, state)
+      }
+      if (state.waitForNeutral) {
+        // Check the left stick only: idle trigger axes on non-standard pads may
+        // report -1. Buttons (including analog triggers) must all be released.
+        const neutral = !pad.buttons.some(b => b.pressed) &&
+          Math.hypot(pad.axes[0] ?? 0, pad.axes[1] ?? 0) < 0.3
+        if (neutral) state.waitForNeutral = false
+        continue
       }
       const { axis, repeat, skipRepeat, prevButtons } = state
       setInputType('dpad')
@@ -95,5 +131,8 @@ export function startGamepadPoller() {
   return () => {
     cancelAnimationFrame(raf)
     window.removeEventListener('keydown', onKeyLog)
+    window.removeEventListener('blur', suspend)
+    document.removeEventListener('visibilitychange', onVisibility)
+    window.removeEventListener('keydown', onChord, true)
   }
 }

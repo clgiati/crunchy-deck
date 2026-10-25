@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startGamepadPoller } from './poller'
 import { dispatchCommand } from './commands'
+import { startSteamChordTracker } from './steamChord'
 vi.mock('./commands', () => ({ dispatchCommand: vi.fn() }))
 
 function pad(index: number, id = `controller-${index}`): Gamepad {
@@ -13,9 +14,14 @@ let frame: FrameRequestCallback
 let pads: (Gamepad | null)[]
 let stop: () => void
 let time: number
+let focused: boolean
+let stopChord: () => void
 function tick(n = 1) { for (let i = 0; i < n; i++) { time += 16; frame(time) } }
 beforeEach(() => {
   time = 0
+  focused = true
+  vi.spyOn(document, 'hasFocus').mockImplementation(() => focused)
+  stopChord = startSteamChordTracker()
   pads = [pad(0), pad(1)]
   vi.spyOn(performance, 'now').mockImplementation(() => time)
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1 })
@@ -24,7 +30,7 @@ beforeEach(() => {
   vi.mocked(dispatchCommand).mockClear()
   stop = startGamepadPoller()
 })
-afterEach(() => { stop(); history.replaceState({}, '', '/'); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { stop(); stopChord(); history.replaceState({}, '', '/'); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('per-controller input state', () => {
   for (const index of [0, 1]) {
@@ -89,5 +95,84 @@ describe('per-controller input state', () => {
   it('stops the animation loop on cleanup', () => {
     stop()
     expect(cancelAnimationFrame).toHaveBeenCalledWith(1)
+  })
+})
+
+
+describe('Steam overlay input suspension', () => {
+  it('does not dispatch or capture presses while focus is elsewhere', () => {
+    focused = false
+    window.dispatchEvent(new Event('blur'))
+    press(pads[0]!, 0, true)
+    press(pads[1]!, 9, true)
+    ;(pads[0]!.axes as number[])[0] = 0.8
+    tick(60)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+  })
+  it('waits for neutral after focus returns, then accepts fresh presses', () => {
+    focused = false; window.dispatchEvent(new Event('blur'))
+    press(pads[0]!, 0, true); tick()
+    focused = true; window.dispatchEvent(new Event('focus')); tick(60)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+    press(pads[0]!, 0, false); tick()
+    press(pads[0]!, 0, true); tick()
+    expect(dispatchCommand).toHaveBeenCalledTimes(1)
+    expect(dispatchCommand).toHaveBeenCalledWith('confirm')
+  })
+  it('latches focus loss even if blur and focus happen between frames', () => {
+    window.dispatchEvent(new Event('blur'))
+    press(pads[0]!, 1, true)
+    window.dispatchEvent(new Event('focus'))
+    tick(10)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+  })
+  it('cancels an existing stick repeat and does not resume it on return', () => {
+    (pads[0]!.axes as number[])[0] = 0.8; tick(30)
+    const count = vi.mocked(dispatchCommand).mock.calls.length
+    focused = false; window.dispatchEvent(new Event('blur')); tick(60)
+    focused = true; tick(60)
+    expect(dispatchCommand).toHaveBeenCalledTimes(count)
+    ;(pads[0]!.axes as number[])[0] = 0; tick()
+    ;(pads[0]!.axes as number[])[0] = 0.8; tick()
+    expect(dispatchCommand).toHaveBeenCalledTimes(count + 1)
+  })
+  it('suspends while a Steam chord is held even before focus changes', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true }))
+    press(pads[0]!, 0, true); tick(10)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Meta' })); tick(10)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+    press(pads[0]!, 0, false); tick()
+    press(pads[0]!, 0, true); tick()
+    expect(dispatchCommand).toHaveBeenCalledTimes(1)
+    expect(dispatchCommand).toHaveBeenCalledWith('confirm')
+  })
+  it('does not let an idle peer rearm a controller with a held button', () => {
+    focused = false; tick()
+    press(pads[1]!, 9, true)
+    focused = true; tick(60)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+    press(pads[0]!, 0, true); tick()
+    expect(dispatchCommand).toHaveBeenCalledTimes(1)
+    expect(dispatchCommand).toHaveBeenCalledWith('confirm')
+  })
+  it('handles hidden pages and waits for release when shown again', () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    press(pads[0]!, 0, true); tick(10)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+    visibility.mockReturnValue('visible'); tick(10)
+    expect(dispatchCommand).not.toHaveBeenCalled()
+    press(pads[0]!, 0, false); tick()
+    press(pads[0]!, 0, true); tick()
+    expect(dispatchCommand).toHaveBeenCalledTimes(1)
+    expect(dispatchCommand).toHaveBeenCalledWith('confirm')
+  })
+  it('cancels skip repeats while an overlay owns input', () => {
+    history.replaceState({}, '', '/watch/test')
+    press(pads[0]!, 7, true); tick(30)
+    const count = vi.mocked(dispatchCommand).mock.calls.length
+    focused = false; window.dispatchEvent(new Event('blur')); tick(60)
+    focused = true; tick(60)
+    expect(dispatchCommand).toHaveBeenCalledTimes(count)
   })
 })
